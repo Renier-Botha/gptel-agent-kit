@@ -1,0 +1,11 @@
+# Byte-compiled / generated
+*.elc
+*.eln
+\#*\#
+.\#*
+
+# Backups / autosaves
+*~
+
+# Local/personal state that shouldn't be published from this repo
+/tools/

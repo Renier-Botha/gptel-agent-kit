@@ -1,0 +1,112 @@
+;;; context-at-refs.el --- @path/@buffer context expansion -*- lexical-binding: t; -*-
+
+;; Adds Aider/Cursor-style "@thing" ergonomics to gptel: typing
+;; "@some-file.el" or "@some-buffer-name" in a prompt inlines that
+;; file's/buffer's contents before the request is sent.
+;;
+;; Implemented as a `gptel-prompt-transform-functions' hook, which
+;; runs in a temporary copy of the outgoing prompt -- so this only
+;; affects the text sent for *this* request, no persistent state.
+
+(require 'gptel)
+(require 'project)
+(require 'cl-lib)
+;; `gptel-agent--truncate' is defined in tools-read.el, loaded before
+;; this file by core/init.el.
+(declare-function gptel-agent--truncate "tools-read")
+
+(defvar gptel-agent-at-ref-regexp
+  "\\(^\\|[[:space:]]\\)@\\([[:alnum:]_./*-]+\\)"
+  "Regexp matching @refs in a prompt.
+Group 1 is the character before `@' (or empty at line start).
+Group 2 is the ref itself (buffer name or file path), without the `@'.
+Includes `*' so internal buffer names like *scratch* or *Messages*
+can be referenced. Known limitation: trailing sentence punctuation
+(e.g. a ref immediately followed by a period at end of sentence)
+becomes part of the ref and will simply fail to resolve -- harmless,
+but means such refs need a space before the period to expand.")
+
+(defvar gptel-agent-at-ref-resolvers nil
+  "List of functions tried in order to resolve an @ref.
+Each function takes REF (the text after `@', a string) and returns
+either resolved content as a string, or nil to defer to the next
+resolver. Populated with buffer/file resolution by this file (first,
+so it always wins); other modules (e.g. skills.el) can extend it with
+=(add-to-list \\='gptel-agent-at-ref-resolvers #\\='my-resolver t)= -- the
+trailing t appends, so more specific/local things stay checked first.")
+
+(defun gptel-agent--resolve-buffer-or-file-ref (ref)
+  "Resolve REF to an open buffer, a file, or a directory, returning
+its contents (or, for a directory, a recursive file listing) as a
+string, or nil if REF doesn't resolve to any of those. Tries, in
+order: an open buffer named REF, then a path resolved against the
+current project root (if any), then against `default-directory'."
+  (cond
+   ((get-buffer ref)
+    (with-current-buffer (get-buffer ref) (buffer-string)))
+   (t
+    (let* ((root (when-let ((proj (project-current))) (project-root proj)))
+           (candidates (delq nil (list (and root (expand-file-name ref root))
+                                       (expand-file-name ref default-directory)))))
+      (cl-loop for path in candidates
+               when (file-exists-p path)
+               return (if (file-directory-p path)
+                          (mapconcat (lambda (f) (file-relative-name f path))
+                                     (directory-files-recursively path "." nil)
+                                     "\n")
+                        (with-temp-buffer
+                          (insert-file-contents path)
+                          (buffer-string))))))))
+
+(add-to-list 'gptel-agent-at-ref-resolvers #'gptel-agent--resolve-buffer-or-file-ref t)
+
+(defun gptel-agent--resolve-at-ref (ref)
+  "Resolve REF (text after `@') by trying each function in
+`gptel-agent-at-ref-resolvers' in turn, returning the first non-nil
+result, or nil if none resolve it."
+  (cl-some (lambda (fn) (funcall fn ref)) gptel-agent-at-ref-resolvers))
+
+(defun gptel-agent-expand-at-refs (&optional _fsm)
+  "Expand @refs in the current prompt-construction buffer in place.
+Intended for `gptel-prompt-transform-functions'; see file commentary."
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward gptel-agent-at-ref-regexp nil t)
+      (let* ((ref (match-string 2))
+             (start (match-end 1))   ; position of the literal "@"
+             (end (match-end 0))     ; end of the ref text
+             (content (gptel-agent--resolve-at-ref ref)))
+        (when content
+          (delete-region start end)
+          (goto-char start)
+          (insert (format "\n```%s\n%s\n```\n" ref (gptel-agent--truncate content))))))))
+
+(add-hook 'gptel-prompt-transform-functions #'gptel-agent-expand-at-refs)
+
+;; --- gptel-agent-insert-file-ref: C-x C-f-style @ref picker ------------
+
+;;;###autoload
+(defun gptel-agent-insert-file-ref ()
+  "Prompt for a file or directory with the same completion UI as
+`find-file' (`read-file-name', so it autocompletes paths as you type,
+supports all the usual minibuffer/ido/vertico/etc. completion you
+already use for C-x C-f), then insert it at point as \"@path \" --
+the same @ref syntax `gptel-agent-expand-at-refs' expands before the
+prompt is sent. Unlike `find-file' this never visits/opens the file;
+it only inserts a reference to it. Referencing a directory expands to
+a recursive file listing (via `gptel-agent--resolve-buffer-or-file-ref'),
+not the directory's file contents. Bound to C-c C-f in `gptel-mode-map'."
+  (interactive)
+  (let* ((path (expand-file-name (read-file-name "Attach file: " default-directory nil t)))
+         (root (when-let ((proj (project-current))) (project-root proj)))
+         (rel (cond
+               (root (file-relative-name path root))
+               (t (file-relative-name path default-directory)))))
+    (insert (format "@%s " rel))))
+
+;; Bind directly into gptel-mode-map, mirroring skills.el's C-c C-a
+;; binding and gptel's own C-c C-c convention.
+(define-key gptel-mode-map (kbd "C-c C-f") #'gptel-agent-insert-file-ref)
+
+(provide 'gptel-agent-context-at-refs)
+;;; context-at-refs.el ends here
