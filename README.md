@@ -33,18 +33,21 @@ hatch for bursts of scaffolding work, see below).
 
 ```
 your-config/                 <- wherever you clone/symlink this repo
-├── core/          <- this repo. Hand-written, reviewed like normal code.
-│   ├── init.el             entry point, loads everything else below
-│   ├── tools-read.el       read-only tools
-│   ├── tools-edit.el       write tools
-│   ├── context-at-refs.el  @ref expansion in prompts
-│   ├── skills.el           pickup of ~/.agents/skills/ SKILL.md files
-│   ├── meta-tool.el        the define_tool self-authoring mechanism
-│   ├── tools-misc.el       misc generic utility tools
-│   ├── system-prompt.el    wires this README into gptel's system prompt
-│   └── tool-display.el     nicer minibuffer/echo display of tool calls
-└── tools/         <- NOT hand-written. Only ever written by define_tool.
-                      Each file here is a tool the model gave itself.
+├── core/                    <- this repo. Hand-written, reviewed like normal code.
+│   ├── init.el              entry point, loads everything in lisp/
+│   ├── README.md            this file
+│   └── lisp/
+│       ├── tools-read.el       read-only tools
+│       ├── tools-edit.el       write tools
+│       ├── tools-exec.el       run_shell_command / eval_elisp
+│       ├── context-at-refs.el  @ref expansion in prompts
+│       ├── skills.el           pickup of ~/.agents/skills/ SKILL.md files
+│       ├── meta-tool.el        the define_tool self-authoring mechanism
+│       ├── tools-misc.el       misc generic utility tools
+│       ├── system-prompt.el    wires this README into gptel's system prompt
+│       └── tool-display.el     nicer minibuffer/echo display of tool calls
+└── tools/                   <- NOT hand-written. Only ever written by define_tool.
+                                Each file here is a tool the model gave itself.
 ```
 
 `core/` is this repo: generic, publishable mechanism. `tools/` is

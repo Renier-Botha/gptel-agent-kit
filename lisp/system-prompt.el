@@ -7,7 +7,7 @@
 (require 'gptel)
 
 (defconst gptel-agent-readme-path
-  (expand-file-name "readme.org"
+  (expand-file-name "../README.md"
                      (file-name-directory (or load-file-name buffer-file-name)))
   "Path to the gptel agent's self-documentation.")
 
