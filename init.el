@@ -24,7 +24,7 @@ here shows exactly what the assistant has given itself over time.")
   (make-directory gptel-agent-tools-dir t))
 
 ;; Load our own hand-written modules, in dependency order.
-(dolist (module '("tools-read" "tools-edit" "tools-exec" "tools-misc" "tool-display" "context-at-refs" "skills" "meta-tool" "approve-all" "system-prompt"))
+(dolist (module '("anchor-root" "tools-read" "tools-edit" "tools-exec" "tools-misc" "tool-display" "context-at-refs" "skills" "meta-tool" "approve-all" "system-prompt"))
   (let ((file (expand-file-name (concat module ".el") gptel-agent-lisp-dir)))
     (if (file-exists-p file)
         (load file)

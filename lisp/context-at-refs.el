@@ -12,8 +12,12 @@
 (require 'project)
 (require 'cl-lib)
 ;; `gptel-agent--truncate' is defined in tools-read.el, loaded before
-;; this file by core/init.el.
+;; this file by core/init.el. `gptel-agent-anchor-root'/
+;; `gptel-agent-expand-under-anchor' are defined in anchor-root.el,
+;; also loaded before this file.
 (declare-function gptel-agent--truncate "tools-read")
+(declare-function gptel-agent-anchor-root "anchor-root")
+(declare-function gptel-agent-expand-under-anchor "anchor-root")
 
 (defvar gptel-agent-at-ref-regexp
   "\\(^\\|[[:space:]]\\)@\\([[:alnum:]_./*-]+\\)"
@@ -35,38 +39,56 @@ so it always wins); other modules (e.g. skills.el) can extend it with
 =(add-to-list \\='gptel-agent-at-ref-resolvers #\\='my-resolver t)= -- the
 trailing t appends, so more specific/local things stay checked first.")
 
-(defun gptel-agent--resolve-buffer-or-file-ref (ref)
+(defun gptel-agent--at-ref-root (&optional fsm)
+  "Return the anchor root to resolve @refs against. Prompt expansion
+runs with a temporary prompt-construction buffer current (not the
+actual gptel conversation buffer), so when FSM (the state machine
+gptel passes to prompt-transform-functions) is available, look up the
+original conversation buffer via its `:buffer' info and anchor
+against that instead -- otherwise the anchor cache would be set on a
+throwaway buffer and re-derived from scratch on every single request."
+  (let ((orig (and fsm (fboundp 'gptel-fsm-info)
+                    (plist-get (gptel-fsm-info fsm) :buffer))))
+    (if (buffer-live-p orig)
+        (gptel-agent-anchor-root orig)
+      (gptel-agent-anchor-root))))
+
+(defun gptel-agent--resolve-buffer-or-file-ref (ref &optional fsm)
   "Resolve REF to an open buffer, a file, or a directory, returning
 its contents (or, for a directory, a recursive file listing) as a
-string, or nil if REF doesn't resolve to any of those. Tries, in
-order: an open buffer named REF, then a path resolved against the
-current project root (if any), then against `default-directory'."
+string, or nil if REF doesn't resolve to any of those. Tries an open
+buffer named REF first, then a path resolved against this
+conversation's anchored root (see anchor-root.el)."
   (cond
    ((get-buffer ref)
     (with-current-buffer (get-buffer ref) (buffer-string)))
    (t
-    (let* ((root (when-let ((proj (project-current))) (project-root proj)))
-           (candidates (delq nil (list (and root (expand-file-name ref root))
-                                       (expand-file-name ref default-directory)))))
-      (cl-loop for path in candidates
-               when (file-exists-p path)
-               return (if (file-directory-p path)
-                          (mapconcat (lambda (f) (file-relative-name f path))
-                                     (directory-files-recursively path "." nil)
-                                     "\n")
-                        (with-temp-buffer
-                          (insert-file-contents path)
-                          (buffer-string))))))))
+    (let ((path (expand-file-name ref (gptel-agent--at-ref-root fsm))))
+      (when (file-exists-p path)
+        (if (file-directory-p path)
+            (mapconcat (lambda (f) (file-relative-name f path))
+                       (directory-files-recursively path "." nil)
+                       "\n")
+          (with-temp-buffer
+            (insert-file-contents path)
+            (buffer-string))))))))
 
 (add-to-list 'gptel-agent-at-ref-resolvers #'gptel-agent--resolve-buffer-or-file-ref t)
 
-(defun gptel-agent--resolve-at-ref (ref)
+(defun gptel-agent--resolve-at-ref (ref &optional fsm)
   "Resolve REF (text after `@') by trying each function in
 `gptel-agent-at-ref-resolvers' in turn, returning the first non-nil
-result, or nil if none resolve it."
-  (cl-some (lambda (fn) (funcall fn ref)) gptel-agent-at-ref-resolvers))
+result, or nil if none resolve it. FSM (if supplied) is passed to any
+resolver whose arity accepts a second argument, so resolvers that care
+about the anchored conversation root (see `gptel-agent--at-ref-root')
+can use it."
+  (cl-some (lambda (fn)
+             (if (>= (cdr (func-arity fn)) 2)
+                 (funcall fn ref fsm)
+               (funcall fn ref)))
+           gptel-agent-at-ref-resolvers))
 
-(defun gptel-agent-expand-at-refs (&optional _fsm)
+(defun gptel-agent-expand-at-refs (&optional fsm)
   "Expand @refs in the current prompt-construction buffer in place.
 Intended for `gptel-prompt-transform-functions'; see file commentary."
   (save-excursion
@@ -75,11 +97,14 @@ Intended for `gptel-prompt-transform-functions'; see file commentary."
       (let* ((ref (match-string 2))
              (start (match-end 1))   ; position of the literal "@"
              (end (match-end 0))     ; end of the ref text
-             (content (gptel-agent--resolve-at-ref ref)))
-        (when content
-          (delete-region start end)
-          (goto-char start)
-          (insert (format "\n```%s\n%s\n```\n" ref (gptel-agent--truncate content))))))))
+             (content (gptel-agent--resolve-at-ref ref fsm)))
+        (delete-region start end)
+        (goto-char start)
+        (if content
+            (insert (format "\n```%s\n%s\n```\n" ref (gptel-agent--truncate content)))
+          (insert (format "@%s [gptel-agent: could not resolve \"%s\" as an open buffer or a file/directory under this conversation's anchored root %s -- this does NOT necessarily mean it doesn't exist; use list_directory/grep_project/list_project_files to locate it rather than shelling out to find/cat]"
+                           ref ref
+                           (gptel-agent--at-ref-root fsm))))))))
 
 (add-hook 'gptel-prompt-transform-functions #'gptel-agent-expand-at-refs)
 
@@ -98,10 +123,8 @@ a recursive file listing (via `gptel-agent--resolve-buffer-or-file-ref'),
 not the directory's file contents. Bound to C-c C-f in `gptel-mode-map'."
   (interactive)
   (let* ((path (expand-file-name (read-file-name "Attach file: " default-directory nil t)))
-         (root (when-let ((proj (project-current))) (project-root proj)))
-         (rel (cond
-               (root (file-relative-name path root))
-               (t (file-relative-name path default-directory)))))
+         (root (gptel-agent-anchor-root))
+         (rel (file-relative-name path root)))
     (insert (format "@%s " rel))))
 
 ;; Bind directly into gptel-mode-map, mirroring skills.el's C-c C-a

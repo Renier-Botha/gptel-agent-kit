@@ -5,6 +5,8 @@
 
 (require 'gptel)
 (require 'project)
+(declare-function gptel-agent-anchor-root "anchor-root")
+(declare-function gptel-agent-expand-under-anchor "anchor-root")
 
 (defvar gptel-agent-read-tools nil
   "Tool structs registered by this file, kept for inspection/debugging.")
@@ -65,7 +67,7 @@ Use list_open_buffers first if you don't know the exact buffer name."
  :name "read_file"
  :function
  (lambda (path)
-   (let ((full (expand-file-name path)))
+   (let ((full (gptel-agent-expand-under-anchor path)))
      (cond
       ((not (file-exists-p full)) (format "No such file: %s" full))
       ((file-directory-p full) (format "%s is a directory, not a file" full))
@@ -74,8 +76,8 @@ Use list_open_buffers first if you don't know the exact buffer name."
             (insert-file-contents full)
             (buffer-string)))))))
  :description "Read a file from disk by path (absolute, or relative to
-Emacs's current default-directory). Prefer read_buffer for files that
-are already open in a buffer."
+this conversation's anchored root -- see gptel-agent-anchor-root).
+Prefer read_buffer for files that are already open in a buffer."
  :args (list '(:name "path" :type string
                :description "Absolute or relative filesystem path"))
  :category "emacs-read")
@@ -97,7 +99,7 @@ buffers, so the model knows what's currently available to read_buffer."
  :name "list_directory"
  :function
  (lambda (path &optional recursive)
-   (let ((full (expand-file-name (or path ".")))
+   (let ((full (gptel-agent-expand-under-anchor (or path ".")))
          (recursive (gptel-agent--bool recursive)))
      (cond
       ((not (file-exists-p full)) (format "No such path: %s" full))
@@ -129,9 +131,9 @@ pass recursive=true to list all files under the path."
  :name "list_project_files"
  :function
  (lambda ()
-   (if-let ((proj (project-current)))
+   (if-let ((proj (project-current nil (gptel-agent-anchor-root))))
        (mapconcat #'identity (project-files proj) "\n")
-     (format "Not inside a known project (project-current returned nil). Use list_directory %S instead." default-directory)))
+     (format "Not inside a known project (project-current returned nil). Use list_directory %S instead." (gptel-agent-anchor-root))))
  :description "List all files tracked by the current project (per
 project.el, usually the nearest VCS root). Use to find a file by name
 before calling read_file. Falls back to suggesting list_directory if
@@ -144,9 +146,8 @@ there's no recognized project (e.g. a plain directory with no VCS)."
  :function
  (lambda (pattern &optional path)
    (let* ((root (cond
-                 (path (expand-file-name path))
-                 ((project-current) (project-root (project-current)))
-                 (t default-directory))))
+                 (path (gptel-agent-expand-under-anchor path))
+                 (t (gptel-agent-anchor-root)))))
      (cond
       ((not (file-directory-p root)) (format "No such directory: %s" root))
       ((not (executable-find "rg"))
@@ -159,8 +160,8 @@ there's no recognized project (e.g. a plain directory with no VCS)."
             (buffer-string)))))))
  :description "Search a directory tree for a regexp pattern using
 ripgrep, returning matches as \"file:line:text\" lines. Defaults to
-the current project root if inside one, otherwise the current
-directory -- pass an explicit path to search anywhere else."
+this conversation's anchored root (see gptel-agent-anchor-root) --
+pass an explicit path to search anywhere else."
  :args (list '(:name "pattern" :type string
                :description "Regexp to search for (ripgrep/rg syntax)")
              '(:name "path" :type string :optional t

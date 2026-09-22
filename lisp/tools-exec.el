@@ -7,6 +7,8 @@
 
 (require 'gptel)
 (declare-function gptel-agent--tools-set "tools-read")
+(declare-function gptel-agent-anchor-root "anchor-root")
+(declare-function gptel-agent-expand-under-anchor "anchor-root")
 
 (defvar gptel-agent-exec-tools nil
   "Tool structs registered by this file (run_shell_command,
@@ -56,8 +58,8 @@ list."
    (condition-case err
        (let* ((default-directory
                (if (and directory (not (string-empty-p directory)))
-                   (file-name-as-directory (expand-file-name directory))
-                 default-directory))
+                   (file-name-as-directory (gptel-agent-expand-under-anchor directory))
+                 (gptel-agent-anchor-root)))
               (buf (generate-new-buffer " *gptel-agent-shell*"))
               (proc (start-process-shell-command "gptel-agent-shell" buf command))
               (deadline (+ (float-time) gptel-agent-exec-timeout)))
@@ -81,7 +83,9 @@ list."
      (error (format "Failed to run command: %s" (error-message-string err)))))
  :description "Run a shell command via the user's shell and return its
 combined stdout+stderr, exit code, and the working directory it ran
-in. Runs synchronously with a timeout (currently 30s); long-running
+in. Defaults to this conversation's anchored root (see
+gptel-agent-anchor-root) rather than Emacs's ambient default-directory.
+Runs synchronously with a timeout (currently 30s); long-running
 commands will be killed and reported as timed out. Output is
 truncated past ~20000 characters. Use for things like running tests,
 git, build tools, find/rg, etc. This has full privileges of the
@@ -91,7 +95,7 @@ when just exploring."
  :args (list '(:name "command" :type string
                :description "Shell command to run, e.g. \"git status\" or \"npm test\"")
              '(:name "directory" :type string :optional t
-               :description "Directory to run the command in; defaults to Emacs's current default-directory if omitted"))
+               :description "Directory to run the command in; defaults to this conversation's anchored root if omitted"))
  :category "emacs-exec")
 
 (gptel-agent--register-exec-tool

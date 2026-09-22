@@ -8,6 +8,8 @@
 
 (declare-function gptel-agent--bool "tools-read")
 (declare-function gptel-agent--tools-set "tools-read")
+(declare-function gptel-agent-expand-under-anchor "anchor-root")
+(declare-function gptel-agent-anchor-root "anchor-root")
 
 (defvar gptel-agent-write-tools nil
   "Tool structs registered by this file. Enabled by default in
@@ -68,8 +70,9 @@ back instead of a stack trace)."
           (goto-char first-match)
           (search-forward old-string)
           (replace-match new-string t t))
-        (format "Replaced the 1 occurrence in buffer %s. Buffer is now modified but unsaved -- call save_buffer if you want this written to disk."
-                (buffer-name)))))))
+        (format "Replaced the 1 occurrence in buffer %s%s. Buffer is now modified but unsaved -- call save_buffer if you want this written to disk."
+                (buffer-name)
+                (if buffer-file-name (format " (visiting %s)" buffer-file-name) " (not visiting a file)")))))))
 
 (gptel-agent--register-write-tool
  :name "edit_buffer"
@@ -109,9 +112,9 @@ write_buffer to create it first."
        (with-current-buffer (get-buffer-create buffer_name)
          (erase-buffer)
          (insert content)
-         (format "%s buffer %s with %d characters. It is not visiting a file (nothing to save_buffer) unless you write it out with write_file."
+         (format "%s buffer %s with %d characters in %s. It is not visiting a file (nothing to save_buffer) unless you write it out with write_file."
                  (if existing "Replaced contents of" "Created")
-                 buffer_name (length content))))))
+                 buffer_name (length content) default-directory)))))
  :description "Create a brand-new, file-less Emacs buffer (e.g. a
 scratch/notes/draft buffer) with the given content, or replace an
 existing non-file buffer's entire contents with overwrite=true. Use
@@ -130,7 +133,7 @@ make a small change to a buffer that already has substantial content."
  :name "write_file"
  :function
  (lambda (path content &optional overwrite)
-   (let ((full (expand-file-name path))
+   (let ((full (gptel-agent-expand-under-anchor path))
          (overwrite (gptel-agent--bool overwrite)))
      (cond
       ((and (file-exists-p full) (not overwrite))
@@ -139,7 +142,8 @@ make a small change to a buffer that already has substantial content."
       (t
        (make-directory (file-name-directory full) t)
        (with-temp-file full (insert content))
-       (format "Wrote %d bytes to %s" (length content) full)))))
+       (format "Wrote %d bytes to %s (resolved against this conversation's anchor root %s)"
+               (length content) full (gptel-agent-anchor-root))))))
  :description "Create a new file with the given content, or (with
 overwrite=true) replace an existing file's entire contents. Creates
 parent directories as needed. Prefer edit_buffer for small, targeted
@@ -161,7 +165,10 @@ file body."
        (with-current-buffer buf
          (if (buffer-file-name)
              (progn (save-buffer)
-                    (format "Saved %s to %s" buffer_name (buffer-file-name)))
+                    (format "Saved buffer %s to file %s (project root: %s)"
+                            buffer_name (buffer-file-name)
+                            (or (and (project-current) (project-root (project-current)))
+                                "none detected")))
            (format "Buffer %s is not visiting a file; nothing to save."
                    buffer_name)))
      (format "No such buffer: %s" buffer_name)))
