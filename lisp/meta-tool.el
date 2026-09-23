@@ -13,6 +13,7 @@
 ;; tools default to :confirm t unless the model passes confirm=false.
 
 (require 'gptel)
+(require 'cl-lib)
 (defvar gptel-agent-tools-dir) ; defined in init.el, loaded before this file
 (declare-function gptel-agent--bool "tools-read")
 (declare-function gptel-agent--tools-set "tools-read")
@@ -70,6 +71,43 @@ result the caller can act on."
         (cons form nil))
     (error (cons nil (format "Could not parse %s as Lisp: %s" what err)))))
 
+(defun gptel-agent--validate-args-spec (args-form)
+  "Validate that ARGS-FORM (the *parsed* args_elisp form, e.g. `(list
+'(:name ...) ...)') will evaluate to something gptel can safely use as
+a tool's :args. This exists because a malformed arg spec (e.g. an
+odd-length plist from a typo like '(:name \"x\" :type)) parses as
+valid Lisp syntax just fine, but later blows up with
+`wrong-type-argument plistp' inside gptel's tool-schema builders --
+and crucially, that failure happens on *every* subsequent request
+once the bad tool is registered, not just when it's called. Catching
+it here, before the tool is ever written to disk or loaded, is much
+cheaper than debugging a conversation that mysteriously started
+failing on every send. Returns nil if valid, or a string describing
+the problem.
+Evaluated with `safe' bound so we don't need arbitrary side effects;
+the form is expected to be a pure literal-ish `(list ...)' expression,
+as documented in define_tool's :description."
+  (condition-case err
+      (let ((args (eval args-form t)))
+        (cond
+         ((not (listp args))
+          (format "args_elisp must evaluate to a list of argument specs (or nil), got: %S" args))
+         ((not (cl-every #'gptel-agent--valid-arg-spec-p args))
+          (format "args_elisp must evaluate to a list of well-formed plists, each with at least a string :name and a :type -- got: %S" args))
+         (t nil)))
+    (error (format "Could not evaluate args_elisp to check it: %s" (error-message-string err)))))
+
+(defun gptel-agent--valid-arg-spec-p (arg)
+  "Non-nil if ARG looks like a well-formed single entry in a tool's
+:args list: a plist (even length, so `plist-get'/`plist-put' on it
+won't signal `wrong-type-argument plistp' down the line inside
+gptel's per-backend schema builders) with at least a string :name and
+a :type."
+  (and (listp arg)
+       (cl-evenp (length arg))
+       (stringp (plist-get arg :name))
+       (plist-get arg :type)))
+
 (defun gptel-agent--generate-tool-file (tool-name description function-form args-form confirm category)
   "Return the full text of a generated tool file for TOOL-NAME."
   (format
@@ -83,14 +121,18 @@ result the caller can act on."
 ;; ~/.config/gptel/tools/ shows exactly this.
 
 (require 'gptel)
+(declare-function gptel-agent--tools-set \"tools-read\")
+(defvar gptel-agent-self-authored-tools)
 
-(gptel-make-tool
- :name \"%1$s\"
- :function %4$s
- :description %5$S
- :args %6$s
- :confirm %7$s
- :category %8$S)
+(gptel-agent--tools-set
+ 'gptel-agent-self-authored-tools
+ (gptel-make-tool
+  :name \"%1$s\"
+  :function %4$s
+  :description %5$S
+  :args %6$s
+  :confirm %7$s
+  :category %8$S))
 
 (provide 'gptel-agent-tool-%1$s)
 ;;; %1$s.el ends here
@@ -121,6 +163,9 @@ before calling this."
                 tool_name path))
        ((cdr function-parse) (cdr function-parse))
        ((cdr args-parse) (cdr args-parse))
+       ((gptel-agent--validate-args-spec (car args-parse))
+        (format "Rejected: %s. This tool was NOT written or loaded -- a malformed :args spec here would break every subsequent gptel request in this Emacs session (and after restart), not just calls to this tool, so define_tool refuses to write it. Fix args_elisp and try again."
+                (gptel-agent--validate-args-spec (car args-parse))))
        (t
         (let ((content (gptel-agent--generate-tool-file
                         tool_name description (car function-parse) (car args-parse)
