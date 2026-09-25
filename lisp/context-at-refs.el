@@ -98,13 +98,10 @@ Intended for `gptel-prompt-transform-functions'; see file commentary."
              (start (match-end 1))   ; position of the literal "@"
              (end (match-end 0))     ; end of the ref text
              (content (gptel-agent--resolve-at-ref ref fsm)))
-        (delete-region start end)
-        (goto-char start)
-        (if content
-            (insert (format "\n```%s\n%s\n```\n" ref (gptel-agent--truncate content)))
-          (insert (format "@%s [gptel-agent: could not resolve \"%s\" as an open buffer or a file/directory under this conversation's anchored root %s -- this does NOT necessarily mean it doesn't exist; use list_directory/grep_project/list_project_files to locate it rather than shelling out to find/cat]"
-                           ref ref
-                           (gptel-agent--at-ref-root fsm))))))))
+        (when content
+          (delete-region start end)
+          (goto-char start)
+          (insert (format "\n```%s\n%s\n```\n" ref (gptel-agent--truncate content))))))))
 
 (add-hook 'gptel-prompt-transform-functions #'gptel-agent-expand-at-refs)
 
